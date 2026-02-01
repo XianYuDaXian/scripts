@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         B站弹幕合并器
 // @namespace    https://github.com/XianYuDaXian/
-// @version      1.3
+// @version      1.4
 // @description  合并其他视频的弹幕到B站播放器
 // @author       XianYuDaXian
 // @match        *://www.bilibili.com/video/*
 // @match        *://www.bilibili.com/bangumi/play/*
+// @match        *://www.bilibili.com/list/watchlater*
 // @connect      api.bilibili.com
 // @connect      comment.bilibili.com
 // @grant        GM_xmlhttpRequest
@@ -229,7 +230,7 @@
             color: var(--text1);
         }
 
-        /* Input & Select Dark Mode */
+        /* 输入框与下拉框深色模式 */
         html[data-dark-theme="true"] .dm-offset-input,
         body.dark .dm-offset-input,
         html[data-dark-theme="true"] select,
@@ -326,6 +327,20 @@
         }
 
         // --- 资源管理 ---
+        getCurrentVideoId() {
+            // 优先从 URL 参数获取 BVID (适配稍后再看等列表页)
+            const params = new URLSearchParams(location.search);
+            const bvidParam = params.get('bvid');
+            if (bvidParam) return bvidParam;
+
+            // 其次从路径获取 (适配普通视频页)
+            const pathMatch = location.pathname.match(/\/video\/(BV[a-zA-Z0-9]{10})/i);
+            if (pathMatch) return pathMatch[1];
+
+            // 兜底使用路径名 (适配番剧等)
+            return location.pathname;
+        }
+
         addSource(id, list, meta) {
             this.sources = this.sources || new Map();
             const key = String(id);
@@ -358,6 +373,8 @@
                 this.saveState();
                 this.clearScreen();
                 this.handleSeek();
+                // 派发更新事件
+                document.dispatchEvent(new CustomEvent('dm-sources-updated'));
             }
         }
 
@@ -386,7 +403,8 @@
         // --- 状态持久化 ---
         saveState() {
             if (!this.video) return;
-            const key = `dm_merger_store_${location.pathname}`;
+            const videoId = this.getCurrentVideoId();
+            const key = `dm_merger_store_${videoId}`;
             const sourcesMeta = this.getSources();
             GM_setValue(key, JSON.stringify(sourcesMeta));
         }
@@ -752,7 +770,7 @@
         let counter = document.getElementById('dm-merger-count');
         if (counter) counter.remove();
 
-        if (totalCount === 0) return; // Hide if 0
+        if (totalCount === 0) return; // 如果为 0 则隐藏
 
         counter = document.createElement('span');
         counter.id = 'dm-merger-count';
@@ -868,7 +886,7 @@
                                     <div style="flex:1; overflow:hidden; min-width:0;">
                                         <div style="font-size:13px; color:var(--text2, #555); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="${s.title}">${s.title}</div>
                                         <div style="font-size:12px; color:var(--text3, #999); display:flex; align-items:center gap:8px;">
-                                            <span>${s.count} 条弹幕</span>
+                                            <span class="dm-preview-trigger" data-id="${s.id}" style="cursor:pointer; color:#00AEEC; border-bottom:1px dashed #00AEEC;" title="点击预览前50条弹幕">${s.count} 条弹幕</span>
                                         </div>
                                     </div>
 
@@ -1112,6 +1130,111 @@
                 });
             };
         });
+
+        // 弹幕预览点击事件
+        mask.querySelectorAll('.dm-preview-trigger').forEach(trigger => {
+            trigger.onclick = (e) => {
+                e.stopPropagation();
+                showDanmakuPreview(trigger.dataset.id);
+            };
+        });
+    }
+
+    function showDanmakuPreview(sourceId) {
+        const source = (engine.sources && engine.sources.get(String(sourceId)));
+        if (!source) return;
+
+        let list = [...source.list]; // 复制一份列表用于排序
+        let displayedCount = 0;
+        let sortOrder = 1; // 1: 正序, -1: 倒序
+        const PAGE_SIZE = 50;
+
+        const mask = document.createElement('div');
+        mask.className = 'dm-merger-modal-mask dm-preview-mask';
+        mask.style.zIndex = '100020';
+        mask.innerHTML = `
+            <div class="dm-merger-modal" style="width:450px; max-height:70vh;">
+                <div class="dm-merger-header">
+                    <span class="dm-merger-title">弹幕预览 (共 ${list.length} 条)</span>
+                    <span class="dm-merger-close">×</span>
+                </div>
+                <div class="dm-preview-content" style="padding:10px; overflow-y:auto; flex:1;">
+                    <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                        <thead style="position:sticky; top:0; background:var(--bg1, #fff); box-shadow:0 1px 0 #eee; z-index:1;">
+                            <tr>
+                                <th id="dm-preview-sort-time" style="text-align:left; padding:8px; color:#00AEEC; width:80px; cursor:pointer; user-select:none;">时间 <span class="sort-icon">▲</span></th>
+                                <th style="text-align:left; padding:8px; color:var(--text3, #999);">内容</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dm-preview-body"></tbody>
+                    </table>
+                    <div id="dm-preview-loader" style="text-align:center; padding:15px; color:var(--text3, #999); display:none;">滚动加载更多...</div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(mask);
+
+        const tbody = mask.querySelector('#dm-preview-body');
+        const container = mask.querySelector('.dm-preview-content');
+        const loader = mask.querySelector('#dm-preview-loader');
+
+        const formatTime = (seconds) => {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        };
+
+        const renderMore = () => {
+            const nextBatch = list.slice(displayedCount, displayedCount + PAGE_SIZE);
+            if (nextBatch.length === 0) {
+                loader.style.display = 'none';
+                return;
+            }
+
+            nextBatch.forEach(dm => {
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid var(--line_light, #f4f4f4)';
+                tr.innerHTML = `
+                    <td style="padding:8px; color:#00AEEC; font-family:monospace;">${formatTime(dm.time)}</td>
+                    <td style="padding:8px; color:var(--text1, #222); word-break:break-all;">${dm.text}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            displayedCount += nextBatch.length;
+            if (displayedCount < list.length) {
+                loader.style.display = 'block';
+            } else {
+                loader.style.display = 'none';
+            }
+        };
+
+        // 初始加载
+        renderMore();
+
+        // 排序逻辑
+        mask.querySelector('#dm-preview-sort-time').onclick = () => {
+            sortOrder *= -1;
+            list.sort((a, b) => (a.time - b.time) * sortOrder);
+            displayedCount = 0;
+            tbody.innerHTML = '';
+            mask.querySelector('.sort-icon').innerText = sortOrder === 1 ? '▲' : '▼';
+            renderMore();
+            container.scrollTop = 0;
+        };
+
+        // 滚动加载更多
+        container.onscroll = () => {
+            if (container.scrollTop + container.clientHeight >= container.scrollHeight - 20) {
+                if (displayedCount < list.length) {
+                    renderMore();
+                }
+            }
+        };
+
+        const close = () => { mask.remove(); };
+        mask.querySelector('.dm-merger-close').onclick = close;
+        mask.onclick = (e) => { if (e.target === mask) close(); };
     }
 
     function injectDanmaku(danmakuList, meta, silent = false) {
@@ -1120,7 +1243,7 @@
             return;
         }
 
-        // Add source to engine with metadata
+        // 将源及其元数据添加到引擎
         engine.addSource(meta.id, danmakuList, {
             id: meta.id,
             title: meta.title,
@@ -1133,14 +1256,15 @@
             groupTitle: meta.groupTitle || meta.title
         });
 
-        updateDanmakuCountUI();
+        // 统一通过事件驱动刷新 UI
+        document.dispatchEvent(new CustomEvent('dm-sources-updated'));
 
         if (!silent) {
             showCustomToast(`成功合并 ${danmakuList.length} 条弹幕`);
         }
     }
 
-    // --- UI Components ---
+    // --- 界面组件 ---
     function createMergerModal() {
         if (document.querySelector('.dm-merger-modal-mask')) return;
 
@@ -1172,7 +1296,7 @@
 
         document.body.appendChild(mask);
 
-        // Events
+        // 事件绑定
         mask.querySelector('.dm-merger-close').onclick = () => mask.remove();
         mask.onclick = (e) => { if (e.target === mask) mask.remove(); };
 
@@ -1186,17 +1310,17 @@
         let isLoadingMore = false;
         let hasMoreResults = true;
 
-        // --- Batch Search Logic ---
+        // --- 批量搜索逻辑 ---
         const selectedBvids = new Set();
         const actionPanel = mask.querySelector('#dm-search-actions');
         const countSpan = mask.querySelector('#dm-search-count');
         const batchBtn = mask.querySelector('#dm-search-batch-btn');
 
         const updateSearchUI = () => {
-            // Count selected: differentiate expanded and unexpanded videos
+            // 计算已选项：区分展开和未展开的视频
             const hasResultItems = document.querySelectorAll('.dm-result-item').length > 0;
 
-            // Get all expanded video BVIDs
+            // 获取所有已展开视频的 BVID
             const expandedBvids = new Set();
             document.querySelectorAll('.dm-inline-details').forEach(details => {
                 if (details.style.display === 'block') {
@@ -1205,13 +1329,13 @@
                 }
             });
 
-            // Count unexpanded selected videos
+            // 计算未展开但被选中的视频数量
             let unexpandedCount = 0;
             selectedBvids.forEach(bvid => {
                 if (!expandedBvids.has(bvid)) unexpandedCount++;
             });
 
-            // Count expanded part selections
+            // 计算已展开的分P选中数量
             const expandedPageItems = document.querySelectorAll('.dm-page-item .dm-checkbox.checked');
             const expandedCount = expandedPageItems.length;
 
@@ -1221,14 +1345,14 @@
             countSpan.innerText = totalCount;
 
             actionPanel.style.display = hasResultItems ? 'flex' : 'none';
-            // Trigger global update
+            // 触发全局更新事件
             document.dispatchEvent(new CustomEvent('dm-selection-change'));
         };
 
-        // Pass selection context to renderList
+        // 将选择上下文传递给渲染函数
         window._dmSearchContext = { selectedBvids, updateSearchUI };
 
-        // Initial title logic
+        // 初始标题逻辑
         const currentTitle = document.querySelector('.video-title')?.title || document.querySelector('title').innerText.replace('_哔哩哔哩_bilibili', '');
         input.value = currentTitle;
 
@@ -1236,7 +1360,7 @@
             let keyword = input.value.trim();
             if (!keyword) return;
 
-            // Extract BVID from URL
+            // 从 URL 提取 BVID
             const bvMatch = keyword.match(/(BV[a-zA-Z0-9]{10})/i);
             if (bvMatch) {
                 keyword = bvMatch[1];
@@ -1245,7 +1369,7 @@
                 if (avMatch) keyword = avMatch[1];
             }
 
-            // Reset pagination for new search
+            // 如果是新搜索则重置分页
             if (!append) {
                 currentSearchKeyword = keyword;
                 currentSearchPage = 1;
@@ -1257,8 +1381,8 @@
                 if (/^(BV|av)/i.test(keyword)) {
                     const data = await API.getView(keyword);
                     renderVideoDetails(data, resultsDiv);
-                    updateSearchUI(); // Ensure action panel is displayed
-                    hasMoreResults = false; // No more results when directly getting video
+                    updateSearchUI(); // 确保显示操作面板
+                    hasMoreResults = false; // 直接获取视频时没有更多结果
                 } else {
                     const result = await API.search(keyword, currentSearchPage);
                     const videos = result.find(r => r.result_type === 'video');
@@ -1269,7 +1393,7 @@
                             lastSearchResults = videos.data;
                         }
                         renderList(lastSearchResults, resultsDiv, append);
-                        // If results are less than page_size, no more results
+                        // 如果结果少于每页数量，则表示没有更多结果了
                         hasMoreResults = videos.data.length >= 30;
                     } else {
                         if (!append) {
@@ -1287,22 +1411,22 @@
             isLoadingMore = false;
         };
 
-        // Infinite scroll loading
+        // 无限滚动加载逻辑
         resultsDiv.addEventListener('scroll', () => {
             if (isLoadingMore || !hasMoreResults) return;
             const { scrollTop, scrollHeight, clientHeight } = resultsDiv;
-            // Load when 100px from bottom
+            // 距离底部 100px 时触发加载
             if (scrollTop + clientHeight >= scrollHeight - 100) {
                 isLoadingMore = true;
                 currentSearchPage++;
-                // Show loading indicator
+                // 显示加载提示
                 const loader = document.createElement('div');
                 loader.className = 'dm-load-more';
                 loader.style.cssText = 'text-align:center; padding:15px; color:var(--text3, #999);';
                 loader.innerText = '加载更多...';
                 resultsDiv.appendChild(loader);
                 doSearch(true).then(() => {
-                    // Remove loading indicator
+                    // 移除加载提示
                     const loaders = resultsDiv.querySelectorAll('.dm-load-more');
                     loaders.forEach(l => l.remove());
                 });
@@ -1382,7 +1506,7 @@
                                 cid = data.pages[0].cid;
                                 title = `P1 ${data.pages[0].part}`;
                                 Object.assign(task, { cid, title, pic: data.pic, author: data.owner.name, groupTitle: data.title });
-                            } else throw new Error('No pages');
+                            } else throw new Error('没有分P数据');
                         }
                         const xml = await API.getDanmaku(cid);
                         const list = parseDanmaku(xml);
@@ -1597,13 +1721,13 @@
                 ${pages.map(p => `
                     <div class="dm-page-item" data-cid="${p.cid}" data-part="${p.part}" data-page="${p.page}" style="padding:10px; border-bottom:1px solid var(--line_light, #eee); cursor:pointer; display:flex; align-items:center; gap:10px;">
                         <div class="dm-checkbox" style="flex-shrink:0;"></div>
-
-                        <!-- Small Cover -->
+    
+                        <!-- 缩略图 -->
                         <div style="width:64px; height:40px; border-radius:3px; overflow:hidden; background:#e7e7e7; flex-shrink:0;">
                             <img src="${videoData.pic.startsWith('//') ? 'https:' + videoData.pic : videoData.pic}" style="width:100%; height:100%; object-fit:cover;" referrerpolicy="no-referrer">
                         </div>
-
-                        <!-- Info -->
+    
+                        <!-- 信息 -->
                         <div style="flex:1; min-width:0;">
                             <div style="font-size:13px; font-weight:bold; color:var(--text1, #222); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" title="P${p.page} ${p.part}">P${p.page} - ${p.part}</div>
                             <div style="font-size:12px; color:var(--text2, #555); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-top:2px;" title="${videoData.title}">${videoData.title}</div>
@@ -1696,7 +1820,8 @@
 
     // --- 恢复会话 ---
     async function tryRestoreSession() {
-        const key = `dm_merger_store_${location.pathname}`;
+        const videoId = engine.getCurrentVideoId();
+        const key = `dm_merger_store_${videoId}`;
         const raw = GM_getValue(key);
         if (!raw) return;
 
@@ -1750,16 +1875,23 @@
                 toolbar.appendChild(btn);
 
                 tryRestoreSession();
-                initRecommendationObserver();
+                initRcmdQuickMerge();
                 clearInterval(checkExist);
             }
         }, 3000);
 
         // --- SPA 导航监听：URL 变化时重置引擎 ---
-        let lastPath = location.pathname;
+        let lastUrl = location.href;
+        let lastVideoId = engine.getCurrentVideoId();
+
         const urlObserver = new MutationObserver(() => {
-            if (location.pathname !== lastPath) {
-                lastPath = location.pathname;
+            const currentUrl = location.href;
+            const currentVideoId = engine.getCurrentVideoId();
+
+            if (currentUrl !== lastUrl || currentVideoId !== lastVideoId) {
+                lastUrl = currentUrl;
+                lastVideoId = currentVideoId;
+
                 engine.reset();
                 const oldBtn = document.getElementById('dm-merger-btn');
                 if (oldBtn) oldBtn.remove();
@@ -1769,75 +1901,216 @@
         urlObserver.observe(document.body, { childList: true, subtree: true });
     }
 
-    function initRecommendationObserver() {
+    function initRcmdQuickMerge() {
+        // 增强样式：完全模拟“稍后再看”并加入自定义动效
+        const style = document.createElement('style');
+        style.innerHTML = `
+            .dm-quick-merge-btn {
+            position: absolute !important;
+            right: 6px !important;
+            bottom: 6px !important; 
+            width: 28px !important;
+            height: 28px !important;
+            background-color: rgba(0,0,0,.6) !important;
+            border-radius: 6px !important;
+            cursor: pointer !important;
+            display: none !important; 
+            align-items: center !important;
+            justify-content: center !important;
+            z-index: 100 !important;
+            color: #fff !important;
+            transition: all .3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        }
+            /* 确保父容器拥有定位上下文，覆盖首页新版卡片和旧版列表 */
+            .pic-box, 
+            .video-card .pic, 
+            .video-card-common .pic,
+            .bili-video-card__cover,
+            .bili-video-card .cover,
+            .video-page-card-small .pic-box {
+                position: relative !important;
+            }
+            /* 各种卡片容器的 Hover 触发 */
+            .pic-box:hover .dm-quick-merge-btn,
+            .video-card .pic:hover .dm-quick-merge-btn,
+            .video-card-common .pic:hover .dm-quick-merge-btn,
+            .bili-video-card__cover:hover .dm-quick-merge-btn,
+            .bili-video-card .cover:hover .dm-quick-merge-btn,
+            .video-page-card-small .pic-box:hover .dm-quick-merge-btn {
+                display: flex !important;
+            }
+            .dm-quick-merge-btn:hover {
+                background-color: rgba(0,0,0,.8) !important;
+                transform: scale(1.05) !important;
+            }
+            .dm-quick-merge-btn.active {
+                color: #fff !important;
+                background-color: rgba(0,0,0,0.8) !important;
+            }
+            /* 状态提示小气泡 */
+        .dm-quick-tip {
+            position: absolute !important;
+            right: 34px !important;
+            top: 50% !important;
+            transform: translateY(-50%) translateX(10px) scale(0.8) !important;
+            white-space: nowrap !important;
+            background: rgba(21,21,21,.9) !important;
+            color: #fff !important;
+            padding: 5px 10px !important;
+            border-radius: 4px !important;
+            font-size: 12px !important;
+            line-height: 1.4 !important;
+            pointer-events: none !important;
+            opacity: 0 !important;
+            transition: all .2s cubic-bezier(0.18, 0.89, 0.32, 1.28) !important;
+            z-index: 200 !important;
+        }
+        .dm-quick-merge-btn:hover .dm-quick-tip {
+            opacity: 1 !important;
+            transform: translateY(-50%) translateX(0) scale(1) !important;
+        }
+        /* 强制对齐并修正原生“稍后再看”提示（.wl-tips） */
+        .wl-tips {
+            left: auto !important;
+            right: 34px !important;
+            top: 50% !important;
+            transform: translateY(-50%) !important;
+            margin-left: 0 !important;
+            padding: 5px 10px !important;
+            font-size: 12px !important;
+            line-height: 1.4 !important;
+            background: rgba(21,21,21,.9) !important;
+            height: auto !important;
+            border-radius: 4px !important;
+        }
+        `;
+        document.head.appendChild(style);
+
+        // 样式已在脚本开头注入
+
+        // 监听全局弹幕源更新事件，刷新所有推荐位按钮状态
+        document.addEventListener('dm-sources-updated', () => {
+            updateDanmakuCountUI(); // 同步刷新顶部计数
+            // 更新所有已生成的快速合并按钮
+            document.querySelectorAll('.dm-quick-merge-btn').forEach(btn => {
+                const card = btn.closest('.video-page-card-small, .video-card, .video-card-common');
+                const link = card?.querySelector('a')?.href;
+                const match = link?.match(/(BV[a-zA-Z0-9]{10})/i);
+                if (match) {
+                    const bvid = match[1];
+                    const sources = engine.getSources();
+                    const isMerged = sources.some(s => s.bvid === bvid);
+
+                    // 内部 updateBtnUI 逻辑
+                    if (isMerged) {
+                        btn.classList.add('active');
+                        btn.innerHTML = `
+                             <svg viewBox="0 0 24 24" width="20" height="20" fill="white"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
+                             <span class="dm-quick-tip">已并入弹幕 (点击移除)</span>
+                         `;
+                    } else {
+                        btn.classList.remove('active');
+                        btn.innerHTML = `
+                             <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                             <span class="dm-quick-tip">一键并入弹幕</span>
+                         `;
+                    }
+                }
+            });
+        });
+
         const observer = new MutationObserver(() => {
-            const cards = document.querySelectorAll('.rec-list .video-page-card, .recommend-list-v1 .video-card-common');
-            cards.forEach(card => {
-                if (card.querySelector('.dm-rec-merge-btn')) return;
-
-                const info = card.querySelector('.info') || card.querySelector('.video-card__info');
-                if (!info) return;
-
-                info.style.position = 'relative';
+            const pics = document.querySelectorAll('.pic-box, .video-card .pic, .video-card-common .pic, .bili-video-card__cover, .bili-video-card .cover');
+            pics.forEach(pic => {
+                if (pic.querySelector('.dm-quick-merge-btn')) return;
 
                 const btn = document.createElement('div');
-                btn.className = 'dm-rec-merge-btn';
-                btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3" /><circle cx="18" cy="6" r="3" /><circle cx="12" cy="18" r="3" /><path d="M6 9 C 6 13.5, 12 11, 12 15" /><path d="M18 9 C 18 13.5, 12 11, 12 15" /></svg>`;
-                btn.title = '合并此视频弹幕';
-                btn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:4px;background:rgba(0,0,0,0.05);color:var(--text3, #999);cursor:pointer;transition:all 0.2s;position:absolute;right:0;bottom:4px;z-index:10;';
+                btn.className = 'dm-quick-merge-btn';
 
-                btn.onmouseenter = () => { btn.style.background = '#00AEEC'; btn.style.color = '#fff'; };
-                btn.onmouseleave = () => { btn.style.background = 'rgba(0,0,0,0.05)'; btn.style.color = 'var(--text3, #999)'; };
+                // 获取当前卡片的 BVID
+                const card = pic.closest('.video-page-card-small, .video-card, .video-card-common, .bili-video-card');
+                const link = card?.querySelector('a')?.href;
+                const match = link?.match(/(BV[a-zA-Z0-9]{10})/i);
+                const bvid = match ? match[1] : null;
+
+                // 初始状态检查
+                const sources = engine.getSources();
+                const isInitiallyMerged = bvid && sources.some(s => s.bvid === bvid);
+
+                if (isInitiallyMerged) {
+                    btn.classList.add('active');
+                    btn.innerHTML = `
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="white"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
+                        <span class="dm-quick-tip">已并入弹幕 (点击移除)</span>
+                    `;
+                } else {
+                    btn.innerHTML = `
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                        <span class="dm-quick-tip">一键并入弹幕</span>
+                    `;
+                }
 
                 btn.onclick = async (e) => {
                     e.preventDefault();
                     e.stopPropagation();
 
-                    const link = card.querySelector('a') || card;
-                    const match = link.href.match(/(BV[a-zA-Z0-9]{10}|av\d+)/);
-                    if (!match) return;
+                    if (!bvid) return;
 
-                    const bvid = match[1];
-
-                    showCustomConfirm('确认合并', `是否合并推荐视频 (${bvid}) 的弹幕？`, async () => {
+                    if (btn.classList.contains('active')) {
+                        // 1. 立即给用户视觉反馈，防止重复点击
                         btn.style.pointerEvents = 'none';
-                        btn.innerHTML = '...';
-
                         try {
                             const data = await API.getView(bvid);
                             if (data.pages?.length > 0) {
-                                const p1 = data.pages[0];
-                                const xml = await API.getDanmaku(p1.cid);
-                                const list = parseDanmaku(xml);
-
-                                injectDanmaku(list, {
-                                    id: p1.cid,
-                                    cid: p1.cid,
-                                    title: data.title + (data.pages.length > 1 ? ' P1' : ''),
-                                    pic: data.pic,
-                                    author: data.owner?.name || ''
-                                }, true);
-
-                                btn.innerHTML = '✔';
-                                btn.style.color = '#4CAF50';
+                                // 2. 执行删除
+                                engine.removeSource(`${bvid}_${data.pages[0].cid}`);
+                                // removeSource 会触发 dm-sources-updated 事件，
+                                // 该事件监听器会自动将所有匹配该 bvid 的按钮恢复为 "+"
+                                showCustomToast('已移除并入弹幕');
                             }
-                        } catch (e) {
-                            btn.innerHTML = '✖';
-                            btn.style.color = '#f25d8e';
-                            showCustomToast('获取失败');
-                        }
-
-                        setTimeout(() => {
+                        } catch (err) {
+                            showCustomToast('移除失败');
+                        } finally {
                             btn.style.pointerEvents = 'auto';
-                            btn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="3" /><circle cx="18" cy="6" r="3" /><circle cx="12" cy="18" r="3" /><path d="M6 9 C 6 13.5, 12 11, 12 15" /><path d="M18 9 C 18 13.5, 12 11, 12 15" /></svg>`;
-                            btn.style.color = 'var(--text3, #999)';
-                            btn.style.background = 'rgba(0,0,0,0.05)';
-                        }, 2000);
-                    });
+                        }
+                        return;
+                    }
+
+                    btn.style.pointerEvents = 'none';
+
+                    try {
+                        const data = await API.getView(bvid);
+                        if (data.pages?.length > 0) {
+                            const p1 = data.pages[0];
+                            const xml = await API.getDanmaku(p1.cid);
+                            const list = parseDanmaku(xml);
+
+                            injectDanmaku(list, {
+                                id: `${bvid}_${p1.cid}`,
+                                cid: p1.cid,
+                                bvid: bvid,
+                                title: data.title + (data.pages.length > 1 ? ' P1' : ''),
+                                pic: data.pic,
+                                author: data.owner?.name || '',
+                                groupTitle: data.title
+                            }, true);
+
+                            // injectDanmaku 会触发 dm-sources-updated 事件，
+                            // 该事件监听器会自动将所有匹配该 bvid 的按钮设为 "对勾"
+                            showCustomToast(`已成功并入：${data.title}`);
+                        }
+                    } catch (err) {
+                        console.error('快速合并失败:', err);
+                        showCustomToast('合并失败', true);
+                    } finally {
+                        btn.style.pointerEvents = 'auto';
+                    }
                 };
-                info.appendChild(btn);
+
+                pic.appendChild(btn);
             });
         });
+
         observer.observe(document.body, { childList: true, subtree: true });
     }
 
