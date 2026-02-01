@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         B站弹幕合并器
 // @namespace    https://github.com/XianYuDaXian/
-// @version      1.4
+// @version      1.5
 // @description  合并其他视频的弹幕到B站播放器
 // @author       XianYuDaXian
 // @match        *://www.bilibili.com/video/*
@@ -56,13 +56,16 @@
         .dm-merger-modal {
             background: var(--bg1, #ffffff);
             color: var(--text1, #222222);
-            border-radius: 8px;
-            width: 500px;
-            max-height: 80vh;
+            border-radius: 12px;
+            width: 850px;
+            max-width: 90vw;
+            max-height: 85vh;
             display: flex;
             flex-direction: column;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.15);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow: hidden;
+            border: 1px solid var(--line_light, #f1f1f1);
         }
         .dm-merger-header {
             padding: 16px 20px;
@@ -122,21 +125,24 @@
         }
         .dm-result-item {
             display: flex;
-            gap: 12px;
-            padding: 10px;
+            gap: 16px;
+            padding: 12px;
             border-bottom: 1px solid var(--line_light, #f0f0f0);
             cursor: pointer;
-            transition: background 0.2s;
+            transition: all 0.2s ease;
         }
         .dm-result-item:hover {
             background: var(--bg2, #f4f5f7);
+            transform: translateX(4px);
         }
         .dm-result-cover {
-            width: 100px;
-            height: 62.5px;
-            border-radius: 4px;
+            width: 160px;
+            height: 100px;
+            border-radius: 6px;
             object-fit: cover;
             background: #e7e7e7;
+            flex-shrink: 0;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         .dm-result-info {
             flex: 1;
@@ -145,14 +151,17 @@
             justify-content: space-between;
         }
         .dm-result-title {
-            font-size: 14px;
-            line-height: 1.4;
-            max-height: 40px;
+            font-size: 15px;
+            font-weight: 500;
+            line-height: 1.5;
+            max-height: 45px;
             overflow: hidden;
             text-overflow: ellipsis;
             display: -webkit-box;
             -webkit-line-clamp: 2;
             -webkit-box-orient: vertical;
+            color: var(--text1, #222);
+            margin-bottom: 4px;
         }
         .dm-result-meta {
             font-size: 12px;
@@ -913,7 +922,7 @@
         }
 
         mask.innerHTML = `
-            <div class="dm-merger-modal" style="width:550px;">
+            <div class="dm-merger-modal" style="width:850px;">
                 <div class="dm-merger-header">
                     <span class="dm-merger-title">管理已合并弹幕</span>
                     <span class="dm-merger-close">×</span>
@@ -1272,22 +1281,31 @@
         mask.className = 'dm-merger-modal-mask';
 
         mask.innerHTML = `
-            <div class="dm-merger-modal" style="width:600px; display:flex; flex-direction:column; max-height:80vh;">
+            <div class="dm-merger-modal">
                 <div class="dm-merger-header" style="flex-shrink:0;">
                     <span class="dm-merger-title">合并弹幕</span>
                     <span class="dm-merger-close">×</span>
                 </div>
-                <div class="dm-merger-body" style="display:flex; flex-direction:column; overflow:hidden; padding:0; height:500px;">
-                    <div class="dm-merger-input-group" style="padding:15px; flex-shrink:0;">
-                        <input type="text" id="dm-search-input" placeholder="输入链接 (BV...) 或关键词搜索..." value="">
-                        <button id="dm-search-btn">搜索</button>
+                <div class="dm-merger-body" style="display:flex; flex-direction:column; overflow:hidden; padding:0; height:600px;">
+                    <div class="dm-merger-input-group" style="padding:15px; flex-shrink:0; border-bottom:1px solid var(--line_light, #eee); display:flex; align-items:center; gap:10px;">
+                        <input type="text" id="dm-search-input" placeholder="输入链接 (BV...) 或关键词搜索..." value="" style="flex:1; height:36px; padding:0 12px;">
+                        <button id="dm-search-btn" style="height:36px; flex-shrink:0;">搜索</button>
+                        
+                        <div id="dm-local-sort" style="display:flex; align-items:center; gap:10px; flex-shrink:0; margin-left:10px;">
+                            <span style="font-size:12px; color:var(--text3, #999); font-weight:500;">排序：</span>
+                            <div style="display:flex; gap:6px;">
+                                <span data-sort="default" style="cursor:pointer; font-size:12px; color:#00AEEC; font-weight:bold; background:rgba(0,174,236,0.1); padding:2px 8px; border-radius:12px;">默认</span>
+                                <span data-sort="play" style="cursor:pointer; font-size:12px; color:var(--text2, #555); padding:2px 8px; border-radius:12px; transition:all 0.2s;">播放量</span>
+                                <span data-sort="danmaku" style="cursor:pointer; font-size:12px; color:var(--text2, #555); padding:2px 8px; border-radius:12px; transition:all 0.2s;">弹幕量</span>
+                            </div>
+                        </div>
                     </div>
-                    <div id="dm-search-results" style="flex:1; overflow-y:auto; padding:0 15px;"></div>
-                    <div id="dm-search-actions" style="display:none; padding:10px 15px; border-top:1px solid var(--line_regular, #eee); background:var(--bg1, #fff); flex-shrink:0; justify-content:space-between; align-items:center;">
-                        <div style="font-size:12px; color:#666;">已选 <span id="dm-search-count">0</span> 项</div>
-                        <div style="display:flex; gap:10px;">
-                            <button id="dm-search-select-all" style="padding:4px 10px; cursor:pointer; background:transparent; border:1px solid #ccc; border-radius:4px; font-size:12px;">全选</button>
-                            <button id="dm-search-batch-btn" style="padding:6px 16px; cursor:pointer; background:#00AEEC; border:none; border-radius:4px; color:#fff; font-weight:bold; font-size:12px;">合并选中</button>
+                    <div id="dm-search-results" style="flex:1; overflow-y:auto; padding:10px 15px;"></div>
+                    <div id="dm-search-actions" style="display:none; padding:12px 20px; border-top:1px solid var(--line_regular, #eee); background:var(--bg2, #f4f5f7); flex-shrink:0; justify-content:space-between; align-items:center;">
+                        <div style="font-size:13px; color:var(--text2, #555); font-weight:500;">已选 <span id="dm-search-count" style="color:#00AEEC; font-weight:bold;">0</span> 项</div>
+                        <div style="display:flex; gap:12px;">
+                            <button id="dm-search-select-all" style="padding:6px 16px; cursor:pointer; background:var(--bg1, #fff); border:1px solid var(--line_regular, #ccd0d7); border-radius:6px; font-size:13px; color:var(--text1, #222); transition:all 0.2s;">全选</button>
+                            <button id="dm-search-batch-btn" style="padding:8px 24px; cursor:pointer; background:#00AEEC; border:none; border-radius:6px; color:#fff; font-weight:bold; font-size:13px; transition:all 0.2s; box-shadow:0 4px 12px rgba(0,174,236,0.2);">合并选中</button>
                         </div>
                     </div>
                 </div>
@@ -1309,6 +1327,39 @@
         let currentSearchPage = 1;
         let isLoadingMore = false;
         let hasMoreResults = true;
+        let currentLocalSort = 'default';
+        let originalSearchResults = null; // 用于重置排序
+
+        // 本地排序逻辑
+        mask.querySelectorAll('#dm-local-sort span[data-sort]').forEach(span => {
+            span.onclick = () => {
+                if (!lastSearchResults || lastSearchResults.length === 0) return;
+
+                const sortType = span.dataset.sort;
+                currentLocalSort = sortType;
+
+                // UI 状态切换
+                mask.querySelectorAll('#dm-local-sort span[data-sort]').forEach(s => {
+                    s.style.color = '';
+                    s.style.fontWeight = '';
+                });
+                span.style.color = '#00AEEC';
+                span.style.fontWeight = 'bold';
+
+                // 执行排序
+                if (sortType === 'default') {
+                    if (originalSearchResults) lastSearchResults = [...originalSearchResults];
+                } else if (sortType === 'play') {
+                    lastSearchResults.sort((a, b) => (b.play || 0) - (a.play || 0));
+                } else if (sortType === 'danmaku') {
+                    lastSearchResults.sort((a, b) => (b.video_review || 0) - (a.video_review || 0));
+                }
+
+                // 重新渲染
+                resultsDiv.innerHTML = '';
+                renderList(lastSearchResults, resultsDiv, false);
+            };
+        });
 
         // --- 批量搜索逻辑 ---
         const selectedBvids = new Set();
@@ -1389,9 +1440,19 @@
                     if (videos && videos.data && videos.data.length > 0) {
                         if (append) {
                             lastSearchResults = [...lastSearchResults, ...videos.data];
+                            if (originalSearchResults) originalSearchResults = [...originalSearchResults, ...videos.data];
                         } else {
                             lastSearchResults = videos.data;
+                            originalSearchResults = [...videos.data];
                         }
+
+                        // 如果有当前排序，则应用
+                        if (currentLocalSort === 'play') {
+                            lastSearchResults.sort((a, b) => (b.play || 0) - (a.play || 0));
+                        } else if (currentLocalSort === 'danmaku') {
+                            lastSearchResults.sort((a, b) => (b.video_review || 0) - (a.video_review || 0));
+                        }
+
                         renderList(lastSearchResults, resultsDiv, append);
                         // 如果结果少于每页数量，则表示没有更多结果了
                         hasMoreResults = videos.data.length >= 30;
@@ -1724,7 +1785,7 @@
                         <div class="dm-checkbox" style="flex-shrink:0;"></div>
     
                         <!-- 缩略图 -->
-                        <div style="width:64px; height:40px; border-radius:3px; overflow:hidden; background:#e7e7e7; flex-shrink:0;">
+                        <div style="width:120px; height:75px; border-radius:6px; overflow:hidden; background:#e7e7e7; flex-shrink:0; box-shadow:0 2px 6px rgba(0,0,0,0.1);">
                             <img src="${videoData.pic.startsWith('//') ? 'https:' + videoData.pic : videoData.pic}" style="width:100%; height:100%; object-fit:cover;" referrerpolicy="no-referrer">
                         </div>
     
