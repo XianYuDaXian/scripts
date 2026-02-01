@@ -1317,8 +1317,8 @@
         const batchBtn = mask.querySelector('#dm-search-batch-btn');
 
         const updateSearchUI = () => {
-            // 计算已选项：区分展开和未展开的视频
-            const hasResultItems = document.querySelectorAll('.dm-result-item').length > 0;
+            // 计算已选项：只要有搜索列表项或直接显示了分P列表，就显示操作面板
+            const hasResultItems = document.querySelectorAll('.dm-result-item, .dm-page-list').length > 0;
 
             // 获取所有已展开视频的 BVID
             const expandedBvids = new Set();
@@ -1711,6 +1711,7 @@
         const selectedCids = new Set();
 
         container.innerHTML = `
+        <div class="dm-direct-details" style="padding: 10px 0;">
             <div style="font-size:12px;color:var(--text3, #999);margin-bottom:8px;">共 ${pages.length} 个分P：</div>
             <div class="dm-page-list"
                 data-bvid="${videoData.bvid}"
