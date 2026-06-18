@@ -1,7 +1,9 @@
 // ==UserScript==
 // @name         B站弹幕合并器
 // @namespace    https://github.com/XianYuDaXian/
-// @version      1.33
+// @version      1.6
+// @updateURL    https://raw.githubusercontent.com/XianYuDaXian/scripts/main/Bilibili_Danmaku_Merger.js
+// @downloadURL  https://raw.githubusercontent.com/XianYuDaXian/scripts/main/Bilibili_Danmaku_Merger.js
 // @description  合并其他视频弹幕到 B 站原生播放器与右侧弹幕列表（不自绘）
 // @author       XianYuDaXian
 // @match        *://www.bilibili.com/video/*
@@ -29,17 +31,17 @@
 
     const dmLog = (...args) => console.log('[弹幕合并器]', ...args);
     const dmWarn = (...args) => console.warn('[弹幕合并器]', ...args);
-    dmLog('v1.33 已加载', location.href);
+    dmLog('v1.6 已加载', location.href);
 
     const pageWin = () => (typeof unsafeWindow !== 'undefined' ? unsafeWindow : window);
-    try { pageWin().__dmMergerLoadedVersion = '1.33'; } catch (e) { }
+    try { pageWin().__dmMergerLoadedVersion = '1.6'; } catch (e) { }
 
     // --- 播放器 Store 捕获：注入页面主世界（油猴隔离沙箱 + blob 桥接）---
     function dmMergerPageBridgeMain() {
         const w = window;
         if (w.__dmMergerBridge) return;
         w.__dmMergerBridge = true;
-        w.__dmMergerLoadedVersion = '1.33';
+        w.__dmMergerLoadedVersion = '1.6';
         w.__dmMergerBridgeInstalled = true;
         w.__dmMergerStores = w.__dmMergerStores || null;
 
